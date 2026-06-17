@@ -212,7 +212,7 @@ def put_option_account(
     return {"ok": True}
 
 
-# ---------- Heartbeat Pal: alert history (read-only) ----------
+# ---------- Heartbeat Pal: alert history + portfolio ----------
 @router.get("/heartbeat_pal/predictions")
 def get_heartbeat_predictions(settings: Settings = Depends(get_settings)):
     module = _module(settings, "heartbeat_pal")
@@ -225,6 +225,75 @@ def get_heartbeat_portfolio(settings: Settings = Depends(get_settings)):
     module = _module(settings, "heartbeat_pal")
     path = module.project_dir / "portfolio.json"
     return {"portfolio": read_json(path, {})}
+
+
+@router.put("/heartbeat_pal/portfolio")
+def put_heartbeat_portfolio(
+    body: dict,
+    settings: Settings = Depends(get_settings),
+):
+    module = _module(settings, "heartbeat_pal")
+    portfolio = body.get("portfolio") if isinstance(body, dict) else None
+    if not isinstance(portfolio, dict):
+        raise HTTPException(status_code=400, detail="Body must be {portfolio: {...}}")
+    path = module.project_dir / "portfolio.json"
+    write_json(path, portfolio)
+    return {"ok": True}
+
+
+# ---------- Overview: aggregated dashboard ----------
+@router.get("/overview")
+async def overview(settings: Settings = Depends(get_settings)) -> dict:
+    """Aggregate snapshot across all modules for a single-view dashboard."""
+    out: dict[str, Any] = {"modules": []}
+    for key, module in settings.modules.items():
+        latest = None
+        live = False
+        error = None
+        try:
+            if settings.github_token:
+                runs = await gh.list_workflow_runs(settings, module, per_page=5)
+                for r in runs:
+                    append_run_record(settings.runs_dir, key, r, log_text=None)
+                if runs:
+                    latest = runs[0]
+                    live = latest.get("status") in ("in_progress", "queued")
+        except HTTPException as e:
+            error = str(e.detail)
+        except Exception as e:  # pragma: no cover - defensive
+            error = f"{type(e).__name__}: {e}"
+
+        if latest is None:
+            grouped = list_local_runs(settings.runs_dir, key)
+            for date_items in grouped.values():
+                if date_items:
+                    latest = date_items[0]
+                    break
+
+        extra: dict[str, Any] = {}
+        if key == "trading_pal":
+            pool = read_json(settings.data_dir / "trading_pal_candidates.json", {})
+            extra["candidate_count"] = len(pool.get("symbols", []) or [])
+        elif key == "option_pal":
+            positions = read_json(module.project_dir / "positions.json", [])
+            extra["open_positions"] = len(positions) if isinstance(positions, list) else 0
+        elif key == "heartbeat_pal":
+            portfolio = read_json(module.project_dir / "portfolio.json", {})
+            positions = (portfolio or {}).get("positions") or []
+            extra["open_positions"] = len([p for p in positions if (p or {}).get("status") == "open"])
+
+        out["modules"].append({
+            "key": key,
+            "name": module.name,
+            "repo": module.repo,
+            "workflow": module.workflow,
+            "latest": latest,
+            "live": live,
+            "error": error,
+            **extra,
+        })
+    out["github_configured"] = bool(settings.github_token)
+    return out
 
 
 # ---------- Health ----------

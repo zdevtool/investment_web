@@ -29,6 +29,7 @@ async function request(path, opts = {}) {
 export const api = {
   health: () => request('/health'),
   modules: () => request('/modules'),
+  overview: () => request('/overview'),
 
   runs: (key) => request(`/modules/${key}/runs`),
   runsGrouped: (key) => request(`/modules/${key}/runs/grouped`),
@@ -54,4 +55,6 @@ export const api = {
 
   heartbeatPredictions: () => request('/heartbeat_pal/predictions'),
   heartbeatPortfolio: () => request('/heartbeat_pal/portfolio'),
+  saveHeartbeatPortfolio: (portfolio) =>
+    request('/heartbeat_pal/portfolio', { method: 'PUT', body: JSON.stringify({ portfolio }) }),
 }

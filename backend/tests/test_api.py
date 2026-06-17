@@ -104,3 +104,54 @@ def test_extract_log_text_from_zip():
         zf.writestr("1_run.txt", "line 1\nline 2")
     text = extract_log_text_from_zip(buf.getvalue())
     assert "hello world" in text and "line 2" in text
+
+
+def test_overview_offline(client, monkeypatch):
+    """Without a real GitHub token reachable, /overview should still return a
+    structured payload (per-module error captured, latest=None or cached)."""
+    s = get_settings()
+    monkeypatch.setattr(s, "github_token", "")
+    r = client.get("/api/overview")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["github_configured"] is False
+    keys = {m["key"] for m in body["modules"]}
+    assert keys == {"trading_pal", "option_pal", "heartbeat_pal"}
+    for m in body["modules"]:
+        assert "candidate_count" in m or "open_positions" in m
+
+
+def test_heartbeat_portfolio_roundtrip(client, tmp_path, monkeypatch):
+    s = get_settings()
+    fake_proj = tmp_path / "heartbeat_proj"
+    fake_proj.mkdir()
+    monkeypatch.setattr(s.modules["heartbeat_pal"], "project_dir", fake_proj)
+    payload = {"portfolio": {"account": {"current_capital": 1000}, "positions": []}}
+    r = client.put("/api/heartbeat_pal/portfolio", json=payload)
+    assert r.status_code == 200
+    saved = json.loads((fake_proj / "portfolio.json").read_text())
+    assert saved["account"]["current_capital"] == 1000
+    r2 = client.get("/api/heartbeat_pal/portfolio")
+    assert r2.json()["portfolio"]["account"]["current_capital"] == 1000
+
+
+def test_heartbeat_portfolio_bad_body(client):
+    r = client.put("/api/heartbeat_pal/portfolio", json={"wrong": 1})
+    assert r.status_code == 400
+
+
+def test_auth_required_when_token_set(tmp_path, monkeypatch):
+    """When AUTH_TOKEN is configured, calls without the header are 401."""
+    s = get_settings()
+    monkeypatch.setattr(s, "auth_token", "secret123")
+    monkeypatch.setattr(s, "data_dir", tmp_path)
+    monkeypatch.setattr(s, "runs_dir", tmp_path / "runs")
+    s.runs_dir.mkdir(parents=True, exist_ok=True)
+    c = TestClient(app)
+    # /health is public
+    assert c.get("/api/health").status_code == 200
+    # other endpoints require token
+    r = c.get("/api/modules")
+    assert r.status_code == 401
+    r2 = c.get("/api/modules", headers={"X-Auth-Token": "secret123"})
+    assert r2.status_code == 200

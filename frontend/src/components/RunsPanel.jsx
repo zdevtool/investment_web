@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { fmtTime, statusPill } from '../lib/format'
+import { notify } from '../lib/notify'
 
 export default function RunsPanel({ moduleKey, triggerInputs = null }) {
   const [runs, setRuns] = useState([])
@@ -15,17 +16,38 @@ export default function RunsPanel({ moduleKey, triggerInputs = null }) {
   const [summary, setSummary] = useState(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [cancelling, setCancelling] = useState(false)
+  const [filter, setFilter] = useState('')
+  const [logCopied, setLogCopied] = useState(false)
   const pollRef = useRef(null)
   const triggerSnapshotRef = useRef(null)
+  const lastStatusRef = useRef(null)
 
   async function refresh() {
     setLoading(true); setError(null)
     try {
       const data = await api.runs(moduleKey)
-      setRuns(data.runs || [])
+      const fresh = data.runs || []
+      setRuns(fresh)
       const g = await api.runsGrouped(moduleKey)
       setGrouped(g.by_date || {})
-      return data.runs || []
+
+      // detect run completion -> browser notification
+      const latest = fresh[0]
+      if (latest) {
+        const prev = lastStatusRef.current
+        const prevStatus = prev?.status
+        const curStatus = latest.status
+        const wasRunning = prevStatus === 'in_progress' || prevStatus === 'queued'
+        const finishedNow = wasRunning && curStatus === 'completed'
+        const sameRun = prev && Number(prev.id) === Number(latest.id)
+        if (finishedNow && sameRun) {
+          const conc = latest.conclusion || 'finished'
+          notify(`${moduleKey} run #${latest.run_number} ${conc}`,
+                 `Tap to view summary in Investment Hub.`)
+        }
+        lastStatusRef.current = { id: latest.id, status: latest.status }
+      }
+      return fresh
     } catch (e) { setError(e.message); return [] }
     finally { setLoading(false) }
   }
@@ -109,6 +131,45 @@ export default function RunsPanel({ moduleKey, triggerInputs = null }) {
   const latestPill = statusPill(latest)
   const latestRunning = latest && (latest.status === 'in_progress' || latest.status === 'queued')
 
+  const filteredGrouped = useMemo(() => {
+    const q = filter.trim().toLowerCase()
+    if (!q) return grouped
+    const out = {}
+    for (const [date, items] of Object.entries(grouped)) {
+      if (date.toLowerCase().includes(q)) { out[date] = items; continue }
+      const matches = items.filter(r => {
+        const s = `${r.run_number ?? ''} ${r.status ?? ''} ${r.conclusion ?? ''} ${r.event ?? ''}`.toLowerCase()
+        return s.includes(q)
+      })
+      if (matches.length) out[date] = matches
+    }
+    return out
+  }, [grouped, filter])
+
+  function downloadLog() {
+    if (!logText) return
+    const blob = new Blob([logText], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${moduleKey}-run-${openRun}.txt`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+
+  async function copyLog() {
+    if (!logText) return
+    try {
+      await navigator.clipboard.writeText(logText)
+      setLogCopied(true)
+      setTimeout(() => setLogCopied(false), 1500)
+    } catch {
+      /* noop */
+    }
+  }
+
   // Auto-poll if latest is running, even without explicit trigger.
   useEffect(() => {
     if (latestRunning && !pollRef.current) schedulePoll(8000)
@@ -180,10 +241,18 @@ export default function RunsPanel({ moduleKey, triggerInputs = null }) {
       </div>
 
       <div className="card p-4 sm:p-5">
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
           <div className="font-semibold">History (by date)</div>
-          <div className="text-xs text-slate-400">
-            {Object.keys(grouped).length} day(s)
+          <div className="flex items-center gap-2 flex-wrap">
+            <input
+              className="input py-1.5 text-xs w-44"
+              placeholder="Filter date / event / status…"
+              value={filter}
+              onChange={e => setFilter(e.target.value)}
+            />
+            <span className="text-xs text-slate-400">
+              {Object.keys(filteredGrouped).length}/{Object.keys(grouped).length} day(s)
+            </span>
           </div>
         </div>
 
@@ -191,7 +260,10 @@ export default function RunsPanel({ moduleKey, triggerInputs = null }) {
           {Object.keys(grouped).length === 0 && (
             <div className="text-slate-400 text-sm">No cached history yet. Hit Refresh.</div>
           )}
-          {Object.entries(grouped).map(([date, items]) => (
+          {Object.keys(grouped).length > 0 && Object.keys(filteredGrouped).length === 0 && (
+            <div className="text-slate-400 text-sm">No matches for "{filter}".</div>
+          )}
+          {Object.entries(filteredGrouped).map(([date, items]) => (
             <details key={date} className="rounded-xl bg-ink-800/60 border border-white/5">
               <summary className="cursor-pointer px-4 py-2.5 flex items-center justify-between">
                 <span className="font-medium">{date}</span>
@@ -231,7 +303,13 @@ export default function RunsPanel({ moduleKey, triggerInputs = null }) {
           <div className="card w-full max-w-3xl max-h-[88vh] flex flex-col">
             <div className="flex items-center justify-between p-4 border-b border-white/5">
               <div className="font-semibold">Run #{openRun}</div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <button className="btn-ghost text-xs" onClick={copyLog} disabled={!logText}>
+                  {logCopied ? 'Copied!' : 'Copy'}
+                </button>
+                <button className="btn-ghost text-xs" onClick={downloadLog} disabled={!logText}>
+                  Download
+                </button>
                 <button className="btn-ghost text-xs" onClick={() => openLog(openRun, true)}>Refetch</button>
                 <button className="btn-ghost text-xs" onClick={() => { setOpenRun(null); setLogText(''); setSummary(null) }}>Close</button>
               </div>

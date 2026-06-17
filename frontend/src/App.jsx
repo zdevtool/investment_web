@@ -2,18 +2,20 @@ import { useEffect, useState } from 'react'
 import TradingPalPage from './pages/TradingPalPage'
 import OptionPalPage from './pages/OptionPalPage'
 import HeartbeatPalPage from './pages/HeartbeatPalPage'
+import OverviewPage from './pages/OverviewPage'
 import ErrorBoundary from './components/ErrorBoundary'
 import SettingsSheet from './components/SettingsSheet'
 import { api } from './lib/api'
 
 const TABS = [
+  { key: 'overview', label: 'Home', icon: '🏠' },
   { key: 'trading_pal', label: 'Trading', icon: '📈' },
   { key: 'option_pal', label: 'Options', icon: '🎯' },
   { key: 'heartbeat_pal', label: 'Heartbeat', icon: '💓' },
 ]
 
 export default function App() {
-  const [tab, setTab] = useState(() => localStorage.getItem('hub.tab') || 'trading_pal')
+  const [tab, setTab] = useState(() => localStorage.getItem('hub.tab') || 'overview')
   const [health, setHealth] = useState(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
 
@@ -56,6 +58,7 @@ export default function App() {
 
       <ErrorBoundary>
         <main className="mx-auto max-w-3xl px-3 sm:px-4 pt-4">
+          {tab === 'overview' && <OverviewPage onJump={k => setTab(k)} />}
           {tab === 'trading_pal' && <TradingPalPage />}
           {tab === 'option_pal' && <OptionPalPage />}
           {tab === 'heartbeat_pal' && <HeartbeatPalPage />}
@@ -64,7 +67,7 @@ export default function App() {
 
       <nav className="fixed bottom-0 inset-x-0 z-30 border-t border-white/5 bg-ink-950/95 backdrop-blur"
            style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
-        <div className="mx-auto max-w-3xl grid grid-cols-3">
+        <div className="mx-auto max-w-3xl grid grid-cols-4">
           {TABS.map(t => {
             const active = tab === t.key
             return (

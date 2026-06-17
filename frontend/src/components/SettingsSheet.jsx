@@ -1,16 +1,24 @@
 import { useEffect, useState } from 'react'
 import { api, getToken, setToken } from '../lib/api'
+import {
+  notifyEnabled, setNotifyEnabled,
+  permissionState, requestPermission,
+} from '../lib/notify'
 
 export default function SettingsSheet({ open, onClose }) {
   const [token, setLocalToken] = useState('')
   const [health, setHealth] = useState(null)
   const [msg, setMsg] = useState(null)
   const [err, setErr] = useState(null)
+  const [notif, setNotif] = useState(false)
+  const [permState, setPermState] = useState('default')
 
   useEffect(() => {
     if (!open) return
     setLocalToken(getToken())
     setMsg(null); setErr(null)
+    setNotif(notifyEnabled())
+    setPermState(permissionState())
     api.health().then(setHealth).catch(e => setErr(e.message))
   }, [open])
 
@@ -23,6 +31,25 @@ export default function SettingsSheet({ open, onClose }) {
   }
   function clear() {
     setToken(''); setLocalToken(''); setMsg('Token cleared.')
+  }
+
+  async function toggleNotif(checked) {
+    if (checked) {
+      const r = await requestPermission()
+      setPermState(r)
+      if (r === 'granted') {
+        setNotifyEnabled(true); setNotif(true)
+        setMsg('Notifications enabled. You will be alerted when runs complete.')
+      } else {
+        setNotifyEnabled(false); setNotif(false)
+        setErr(r === 'unsupported'
+          ? 'This browser does not support Notifications.'
+          : 'Permission was not granted.')
+      }
+    } else {
+      setNotifyEnabled(false); setNotif(false)
+      setMsg('Notifications disabled.')
+    }
   }
 
   return (
@@ -69,9 +96,29 @@ export default function SettingsSheet({ open, onClose }) {
           {msg && <div className="text-sm rounded-lg bg-emerald-500/10 text-emerald-200 px-3 py-2 border border-emerald-500/20">{msg}</div>}
           {err && <div className="text-sm rounded-lg bg-rose-500/10 text-rose-200 px-3 py-2 border border-rose-500/20 break-words">{err}</div>}
 
+          <Section title="Notifications">
+            <div className="text-xs text-slate-400 mb-2">
+              Browser alert when a workflow you triggered finishes. Permission state:{' '}
+              <span className={
+                permState === 'granted' ? 'text-emerald-300'
+                : permState === 'denied' ? 'text-rose-300'
+                : 'text-slate-300'
+              }>{permState}</span>
+            </div>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={notif}
+                onChange={e => toggleNotif(e.target.checked)}
+                disabled={permState === 'unsupported'}
+              />
+              <span>Notify me when runs complete</span>
+            </label>
+          </Section>
+
           <Section title="About">
             <div className="text-xs text-slate-400">
-              Investment Hub v0.2 · React + FastAPI · No DB. Single user.
+              Investment Hub v0.3 · React + FastAPI · No DB. Single user.
             </div>
           </Section>
         </div>

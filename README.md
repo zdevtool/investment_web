@@ -15,12 +15,20 @@ For each module the UI lets you:
 2. **Trigger** the workflow manually with one tap. Page auto-polls until the
    new run shows up and finishes.
 3. **Cancel** an in-progress workflow.
-4. Browse historic runs **grouped by date** (cached on the backend).
+4. Browse historic runs **grouped by date** (cached on the backend) with a
+   live filter box.
 5. View / edit the data the project consumes:
    - Trading Pal: candidate-pool symbols & groups (live-loaded by `trading_pal`)
    - Option Pal:  option holdings + portfolio/account JSON
-   - Heartbeat Pal: predictions snapshot + portfolio (read-only)
+   - Heartbeat Pal: account fields + structured positions editor (writes to
+     `heartbeat_pal/portfolio.json`)
 6. Install as a **PWA** on iPhone home screen — fullscreen, dark, native feel.
+7. Get a **browser notification** when a workflow you triggered finishes
+   (opt-in from the ⚙︎ Settings drawer).
+8. **Copy** or **download** any run log (`.txt`) straight from the modal.
+9. The **Home / Overview** tab shows the latest run, live state, and key
+   editable counts for all three modules in one screen, with a one-tap **Run**
+   button per module. Auto-refreshes every 30 s.
 
 Single user, no DB. Optional shared-token auth to safely expose beyond
 localhost. State lives on disk under `web/data/` and in the existing project
@@ -123,8 +131,10 @@ source .venv/bin/activate
 pytest tests/ -q
 ```
 
-Eight smoke tests cover health, modules, candidate-pool round-trip, and
-the three log parsers. They run in <1 s with no network access.
+Eight smoke tests cover health, modules, candidate-pool round-trip, the
+three log parsers, the heartbeat-portfolio round-trip, the `/overview`
+aggregate, and the optional auth gate. They run in <1 s with no network
+access.
 
 ### Use it on your phone
 
@@ -184,7 +194,8 @@ formats change.
 | Trading Pal → Candidate Pool | `web/data/trading_pal_candidates.json` |
 | Option Pal → Option Holdings | `option_pal/positions.json` |
 | Option Pal → Account / Portfolio | `option_pal/account.json` |
-| Heartbeat Pal → Predictions / Portfolio | read-only view of `heartbeat_pal/predictions.json` & `portfolio.json` |
+| Heartbeat Pal → Account + Positions | `heartbeat_pal/portfolio.json` |
+| Heartbeat Pal → Predictions | read-only view of `heartbeat_pal/predictions.json` |
 
 ### Trading Pal candidate-pool wiring
 
