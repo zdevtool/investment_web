@@ -1,0 +1,11 @@
+{
+  "symbols": [
+    "VOO", "QQQ", "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META",
+    "TSLA", "AMD", "AVGO", "JPM", "GS", "V", "XOM", "CVX"
+  ],
+  "groups": {
+    "core": ["VOO", "QQQ"],
+    "mag7": ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"]
+  },
+  "notes": "Edit through the web UI."
+}
