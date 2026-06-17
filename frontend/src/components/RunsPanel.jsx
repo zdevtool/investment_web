@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { fmtTime, statusPill } from '../lib/format'
 
@@ -12,6 +12,11 @@ export default function RunsPanel({ moduleKey, triggerInputs = null }) {
   const [logText, setLogText] = useState('')
   const [logLoading, setLogLoading] = useState(false)
   const [toast, setToast] = useState(null)
+  const [summary, setSummary] = useState(null)
+  const [summaryLoading, setSummaryLoading] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
+  const pollRef = useRef(null)
+  const triggerSnapshotRef = useRef(null)
 
   async function refresh() {
     setLoading(true); setError(null)
@@ -20,7 +25,8 @@ export default function RunsPanel({ moduleKey, triggerInputs = null }) {
       setRuns(data.runs || [])
       const g = await api.runsGrouped(moduleKey)
       setGrouped(g.by_date || {})
-    } catch (e) { setError(e.message) }
+      return data.runs || []
+    } catch (e) { setError(e.message); return [] }
     finally { setLoading(false) }
   }
 
@@ -28,20 +34,42 @@ export default function RunsPanel({ moduleKey, triggerInputs = null }) {
     try {
       const g = await api.runsGrouped(moduleKey)
       setGrouped(g.by_date || {})
-    } catch (e) { /* non-fatal */ }
+    } catch { /* non-fatal */ }
   }
 
   useEffect(() => {
+    setRuns([]); setGrouped({}); setSummary(null)
     loadGroupedOnly()
     refresh()
+    return stopPolling
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [moduleKey])
+
+  function stopPolling() {
+    if (pollRef.current) { clearTimeout(pollRef.current); pollRef.current = null }
+  }
+  function schedulePoll(ms = 8000) {
+    stopPolling()
+    pollRef.current = setTimeout(async () => {
+      const fresh = await refresh()
+      const latest = fresh[0]
+      const stillRunning = latest && (latest.status === 'in_progress' || latest.status === 'queued')
+      const newSinceTrigger = triggerSnapshotRef.current &&
+        latest && Number(latest.id) !== Number(triggerSnapshotRef.current)
+      if (stillRunning) schedulePoll(ms)
+      else if (!newSinceTrigger && triggerSnapshotRef.current) schedulePoll(Math.min(ms * 1.5, 20000))
+      else triggerSnapshotRef.current = null
+    }, ms)
+  }
 
   async function onTrigger() {
     setTriggering(true); setError(null)
     try {
+      triggerSnapshotRef.current = runs[0]?.id || null
       await api.trigger(moduleKey, { inputs: triggerInputs || undefined })
-      setToast('Workflow dispatched. New run will appear shortly.')
-      setTimeout(() => { refresh(); setToast(null) }, 4000)
+      setToast('Workflow dispatched. Polling for new run…')
+      schedulePoll(4000)
+      setTimeout(() => setToast(null), 4000)
     } catch (e) {
       setError(e.message)
     } finally {
@@ -49,20 +77,44 @@ export default function RunsPanel({ moduleKey, triggerInputs = null }) {
     }
   }
 
-  async function openLog(runId, refresh = false) {
-    setOpenRun(runId); setLogLoading(true); setLogText('')
+  async function onCancel(runId) {
+    if (!runId) return
+    setCancelling(true); setError(null)
     try {
-      const data = await api.runLog(moduleKey, runId, refresh)
-      setLogText(data.log || '(empty)')
-    } catch (e) {
-      setLogText(`Error: ${e.message}`)
+      await api.cancelRun(moduleKey, runId)
+      setToast(`Cancellation requested for #${runId}`)
+      schedulePoll(3000)
+      setTimeout(() => setToast(null), 3000)
+    } catch (e) { setError(e.message) }
+    finally { setCancelling(false) }
+  }
+
+  async function openLog(runId, force = false) {
+    setOpenRun(runId); setLogLoading(true); setLogText('')
+    setSummary(null); setSummaryLoading(true)
+    try {
+      const [logResp, sumResp] = await Promise.allSettled([
+        api.runLog(moduleKey, runId, force),
+        api.runSummary(moduleKey, runId),
+      ])
+      if (logResp.status === 'fulfilled') setLogText(logResp.value.log || '(empty)')
+      else setLogText(`Error: ${logResp.reason?.message || logResp.reason}`)
+      if (sumResp.status === 'fulfilled') setSummary(sumResp.value.summary || null)
     } finally {
-      setLogLoading(false)
+      setLogLoading(false); setSummaryLoading(false)
     }
   }
 
   const latest = runs[0]
   const latestPill = statusPill(latest)
+  const latestRunning = latest && (latest.status === 'in_progress' || latest.status === 'queued')
+
+  // Auto-poll if latest is running, even without explicit trigger.
+  useEffect(() => {
+    if (latestRunning && !pollRef.current) schedulePoll(8000)
+    if (!latestRunning && !triggerSnapshotRef.current) stopPolling()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [latestRunning])
 
   return (
     <div className="space-y-4">
@@ -76,6 +128,9 @@ export default function RunsPanel({ moduleKey, triggerInputs = null }) {
                   <span className="font-semibold">#{latest.run_number}</span>
                   <span className={`pill ${latestPill.cls}`}>{latestPill.label}</span>
                   <span className="text-slate-400 text-sm">{latest.event}</span>
+                  {latestRunning && (
+                    <span className="pill bg-emerald-500/10 text-emerald-300 animate-pulse">live</span>
+                  )}
                 </div>
                 <div className="text-slate-400 text-sm mt-1">{fmtTime(latest.created_at)}</div>
                 <a href={latest.html_url} target="_blank" rel="noreferrer"
@@ -88,10 +143,16 @@ export default function RunsPanel({ moduleKey, triggerInputs = null }) {
             )}
           </div>
 
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <button className="btn-ghost" onClick={refresh} disabled={loading}>
               {loading ? 'Refreshing…' : 'Refresh'}
             </button>
+            {latestRunning && (
+              <button className="btn-ghost text-rose-300"
+                      onClick={() => onCancel(latest.id)} disabled={cancelling}>
+                {cancelling ? 'Cancelling…' : 'Cancel'}
+              </button>
+            )}
             <button className="btn-primary" onClick={onTrigger} disabled={triggering}>
               {triggering ? 'Dispatching…' : 'Trigger Run'}
             </button>
@@ -110,9 +171,9 @@ export default function RunsPanel({ moduleKey, triggerInputs = null }) {
         )}
 
         {latest && (
-          <div className="mt-4">
+          <div className="mt-4 flex gap-2 flex-wrap">
             <button className="btn-ghost" onClick={() => openLog(latest.id)}>
-              View Log
+              View Log & Summary
             </button>
           </div>
         )}
@@ -166,21 +227,121 @@ export default function RunsPanel({ moduleKey, triggerInputs = null }) {
       </div>
 
       {openRun && (
-        <div className="fixed inset-0 z-40 bg-black/60 flex items-end sm:items-center justify-center p-2 sm:p-6">
-          <div className="card w-full max-w-3xl max-h-[85vh] flex flex-col">
+        <div className="fixed inset-0 z-40 bg-black/70 flex items-end sm:items-center justify-center p-2 sm:p-6">
+          <div className="card w-full max-w-3xl max-h-[88vh] flex flex-col">
             <div className="flex items-center justify-between p-4 border-b border-white/5">
-              <div className="font-semibold">Run #{openRun} log</div>
+              <div className="font-semibold">Run #{openRun}</div>
               <div className="flex items-center gap-2">
                 <button className="btn-ghost text-xs" onClick={() => openLog(openRun, true)}>Refetch</button>
-                <button className="btn-ghost text-xs" onClick={() => { setOpenRun(null); setLogText('') }}>Close</button>
+                <button className="btn-ghost text-xs" onClick={() => { setOpenRun(null); setLogText(''); setSummary(null) }}>Close</button>
               </div>
             </div>
+
+            <div className="px-4 py-3 border-b border-white/5">
+              <SummaryCard moduleKey={moduleKey} summary={summary} loading={summaryLoading} />
+            </div>
+
             <div className="flex-1 overflow-auto p-3 text-xs font-mono whitespace-pre-wrap leading-relaxed">
-              {logLoading ? 'Loading…' : (logText || '(empty)')}
+              {logLoading ? 'Loading log…' : (logText || '(empty)')}
             </div>
           </div>
         </div>
       )}
     </div>
+  )
+}
+
+function SummaryCard({ moduleKey, summary, loading }) {
+  if (loading) return <div className="text-slate-400 text-sm">Parsing summary…</div>
+  if (!summary || summary.available === false)
+    return <div className="text-slate-400 text-sm">No structured summary.</div>
+
+  if (moduleKey === 'trading_pal') {
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center gap-2 flex-wrap text-sm">
+          {summary.regime && <span className="pill bg-emerald-500/15 text-emerald-200">regime: {summary.regime}</span>}
+          <span className="pill bg-ink-800 text-slate-200 border border-white/10">{summary.order_count} signal(s)</span>
+        </div>
+        {summary.headline && <div className="text-xs text-slate-400">{summary.headline}</div>}
+        {summary.orders?.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {summary.orders.map((o, i) => (
+              <span key={i} className={`pill ${sideClass(o.side)}`}>
+                {o.side} {o.symbol}{o.qty ? ` ×${o.qty}` : ''}
+              </span>
+            ))}
+          </div>
+        )}
+        {summary.errors?.length > 0 && <ErrorList errors={summary.errors} />}
+      </div>
+    )
+  }
+
+  if (moduleKey === 'option_pal') {
+    const m = summary.metrics || {}
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center gap-2 flex-wrap text-sm">
+          <span className="pill bg-emerald-500/15 text-emerald-200">calls {m.calls ?? 0}</span>
+          <span className="pill bg-sky-500/15 text-sky-200">puts {m.puts ?? 0}</span>
+          <span className="pill bg-amber-500/15 text-amber-200">closes {m.close_alerts ?? 0}</span>
+          <span className="pill bg-violet-500/15 text-violet-200">rolls {m.rolls ?? 0}</span>
+        </div>
+        {summary.headline && <div className="text-xs text-slate-400">{summary.headline}</div>}
+        {summary.errors?.length > 0 && <ErrorList errors={summary.errors} />}
+      </div>
+    )
+  }
+
+  if (moduleKey === 'heartbeat_pal') {
+    const t = summary.tiers || {}
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center gap-2 flex-wrap text-sm">
+          {summary.pool_size != null &&
+            <span className="pill bg-ink-800 text-slate-200 border border-white/10">pool {summary.pool_size}</span>}
+          <span className="pill bg-rose-500/15 text-rose-200">CRITICAL {t.CRITICAL ?? 0}</span>
+          <span className="pill bg-orange-500/15 text-orange-200">HIGH {t.HIGH ?? 0}</span>
+          <span className="pill bg-amber-500/15 text-amber-200">MEDIUM {t.MEDIUM ?? 0}</span>
+        </div>
+        {summary.top?.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {summary.top.map((a, i) => (
+              <span key={i} className={`pill ${tierBg(a.tier)}`}>
+                {a.tier[0]} {a.symbol}{a.score ? ` (${a.score})` : ''}
+              </span>
+            ))}
+          </div>
+        )}
+        {summary.errors?.length > 0 && <ErrorList errors={summary.errors} />}
+      </div>
+    )
+  }
+
+  return null
+}
+
+function sideClass(side) {
+  if (side === 'BUY' || side === 'ADD') return 'bg-emerald-500/15 text-emerald-200'
+  if (side === 'SELL' || side === 'TRIM') return 'bg-rose-500/15 text-rose-200'
+  return 'bg-slate-500/15 text-slate-200'
+}
+
+function tierBg(tier) {
+  const t = String(tier).toUpperCase()
+  if (t === 'CRITICAL') return 'bg-rose-500/15 text-rose-200'
+  if (t === 'HIGH') return 'bg-orange-500/15 text-orange-200'
+  return 'bg-amber-500/15 text-amber-200'
+}
+
+function ErrorList({ errors }) {
+  return (
+    <details className="text-xs text-rose-300">
+      <summary>{errors.length} error line(s)</summary>
+      <ul className="mt-1 space-y-0.5 font-mono break-words">
+        {errors.slice(0, 5).map((e, i) => <li key={i} className="pl-2">• {e}</li>)}
+      </ul>
+    </details>
   )
 }

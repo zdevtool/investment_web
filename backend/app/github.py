@@ -123,3 +123,22 @@ async def get_run_jobs(
             detail=f"GitHub jobs failed: {resp.text}",
         )
     return resp.json().get("jobs", [])
+
+
+async def cancel_run(
+    settings: Settings,
+    module: ModuleConfig,
+    run_id: int,
+) -> dict:
+    url = (
+        f"{GITHUB_API}/repos/{settings.github_owner}/{module.repo}"
+        f"/actions/runs/{run_id}/cancel"
+    )
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post(url, headers=_headers(settings))
+    if resp.status_code >= 300:
+        raise HTTPException(
+            status_code=resp.status_code,
+            detail=f"GitHub cancel failed: {resp.text}",
+        )
+    return {"ok": True, "run_id": run_id}

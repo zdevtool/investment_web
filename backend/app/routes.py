@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel
 
 from .config import Settings, get_settings
 from . import github as gh
+from .log_parser import summarize as summarize_log
 from .storage import (
     append_run_record,
     extract_log_text_from_zip,
@@ -61,7 +62,7 @@ def get_runs_grouped(key: str, settings: Settings = Depends(get_settings)):
 @router.post("/modules/{key}/trigger")
 async def trigger_run(
     key: str,
-    body: dict | None = None,
+    body: Optional[dict] = Body(default=None),
     settings: Settings = Depends(get_settings),
 ):
     module = _module(settings, key)
@@ -99,6 +100,40 @@ async def get_run_log(
     return {"run": meta, "log": log_text, "cached": False}
 
 
+@router.get("/modules/{key}/runs/{run_id}/summary")
+async def get_run_summary(
+    key: str,
+    run_id: int,
+    settings: Settings = Depends(get_settings),
+):
+    """Return a structured per-module summary parsed from the run log."""
+    module = _module(settings, key)
+    cached = get_local_run(settings.runs_dir, key, run_id)
+    log_text = (cached or {}).get("log_excerpt") if cached else None
+    if not log_text:
+        try:
+            log_bytes = await gh.get_run_logs(settings, module, run_id)
+            log_text = extract_log_text_from_zip(log_bytes)
+            runs = await gh.list_workflow_runs(settings, module, per_page=100)
+            meta = next((r for r in runs if int(r.get("id", 0)) == int(run_id)), None)
+            if meta:
+                append_run_record(settings.runs_dir, key, meta, log_text=log_text)
+        except HTTPException as e:
+            return {"run_id": run_id, "summary": {"available": False, "error": str(e.detail)}}
+    summary = summarize_log(key, log_text)
+    return {"run_id": run_id, "summary": summary}
+
+
+@router.post("/modules/{key}/runs/{run_id}/cancel")
+async def cancel_run_endpoint(
+    key: str,
+    run_id: int,
+    settings: Settings = Depends(get_settings),
+):
+    module = _module(settings, key)
+    return await gh.cancel_run(settings, module, run_id)
+
+
 # ---------- Trading Pal: candidate pool ----------
 class CandidatePool(BaseModel):
     symbols: list[str] = []
@@ -129,7 +164,7 @@ def put_trading_candidates(
     settings: Settings = Depends(get_settings),
 ) -> dict:
     path = settings.data_dir / "trading_pal_candidates.json"
-    write_json(path, body.dict())
+    write_json(path, body.model_dump())
     return {"ok": True}
 
 
@@ -198,5 +233,6 @@ def health(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
     return {
         "ok": True,
         "github_configured": bool(settings.github_token),
+        "auth_required": bool(settings.auth_token),
         "modules": list(settings.modules.keys()),
     }

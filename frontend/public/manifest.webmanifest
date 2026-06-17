@@ -1,0 +1,13 @@
+{
+  "name": "Investment Hub",
+  "short_name": "Hub",
+  "description": "Personal dashboard for trading_pal, option_pal and heartbeat_pal",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b1020",
+  "theme_color": "#0b1020",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

@@ -30,6 +30,7 @@ class Settings(BaseModel):
     github_token: str = ""
     github_owner: str = ""
     cors_allow_origin: str = "*"
+    auth_token: str = ""
     web_root: Path = WEB_ROOT
     data_dir: Path = WEB_ROOT / "data"
     runs_dir: Path = WEB_ROOT / "data" / "runs"
@@ -45,6 +46,7 @@ def get_settings() -> Settings:
         github_token=os.getenv("GITHUB_TOKEN", ""),
         github_owner=os.getenv("GITHUB_OWNER", ""),
         cors_allow_origin=os.getenv("CORS_ALLOW_ORIGIN", "*"),
+        auth_token=os.getenv("AUTH_TOKEN", ""),
     )
 
     settings.modules = {

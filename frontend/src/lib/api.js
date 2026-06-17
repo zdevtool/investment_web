@@ -1,16 +1,27 @@
 const BASE = '/api'
+const TOKEN_KEY = 'hub.authToken'
+
+export function getToken() {
+  return localStorage.getItem(TOKEN_KEY) || ''
+}
+export function setToken(t) {
+  if (t) localStorage.setItem(TOKEN_KEY, t)
+  else localStorage.removeItem(TOKEN_KEY)
+}
 
 async function request(path, opts = {}) {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...opts,
-  })
+  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) }
+  const tok = getToken()
+  if (tok) headers['X-Auth-Token'] = tok
+  const res = await fetch(`${BASE}${path}`, { ...opts, headers })
   const text = await res.text()
   let data
   try { data = text ? JSON.parse(text) : null } catch { data = text }
   if (!res.ok) {
     const msg = (data && (data.detail || data.message)) || res.statusText
-    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
+    const err = new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
+    err.status = res.status
+    throw err
   }
   return data
 }
@@ -23,8 +34,12 @@ export const api = {
   runsGrouped: (key) => request(`/modules/${key}/runs/grouped`),
   trigger: (key, body) =>
     request(`/modules/${key}/trigger`, { method: 'POST', body: JSON.stringify(body || {}) }),
+  cancelRun: (key, runId) =>
+    request(`/modules/${key}/runs/${runId}/cancel`, { method: 'POST' }),
   runLog: (key, runId, refresh = false) =>
     request(`/modules/${key}/runs/${runId}/log${refresh ? '?refresh=true' : ''}`),
+  runSummary: (key, runId) =>
+    request(`/modules/${key}/runs/${runId}/summary`),
 
   tradingCandidates: () => request('/trading_pal/candidates'),
   saveTradingCandidates: (body) =>
