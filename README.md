@@ -104,11 +104,10 @@ AUTH_TOKEN=
 > Token: a fine-grained PAT scoped to the three repos with **Actions:
 > read & write** + **Contents: read** is enough.
 
-> If your `option_pal` repository on GitHub is still named `option_pay`
-> (legacy typo), override one line: `OPTION_PAL_REPO=option_pay`. To fix
-> the typo permanently: GitHub → repo Settings → rename, then
-> `git remote set-url origin git@github.com:zdevtool/option_pal.git`
-> in the local `option_pal/` folder.
+> The Option Pal repo was briefly named `option_pay` on GitHub. If your
+> local clone still points at the old URL, run
+> `git -C option_pal remote set-url origin git@github.com:zdevtool/option_pal.git`
+> once.
 
 ### 2. Run the backend
 
