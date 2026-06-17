@@ -89,7 +89,7 @@ GITHUB_OWNER=your_gh_handle_or_org
 # Repo names match the existing remotes (see each project's .git/config).
 TRADING_PAL_REPO=trading_pal
 TRADING_PAL_WORKFLOW=trading.yml
-OPTION_PAL_REPO=option_pay
+OPTION_PAL_REPO=option_pal
 OPTION_PAL_WORKFLOW=options_scanner.yml
 HEARTBEAT_PAL_REPO=heartbeat_pal
 HEARTBEAT_PAL_WORKFLOW=scan.yml
@@ -103,6 +103,12 @@ AUTH_TOKEN=
 
 > Token: a fine-grained PAT scoped to the three repos with **Actions:
 > read & write** + **Contents: read** is enough.
+
+> If your `option_pal` repository on GitHub is still named `option_pay`
+> (legacy typo), override one line: `OPTION_PAL_REPO=option_pay`. To fix
+> the typo permanently: GitHub → repo Settings → rename, then
+> `git remote set-url origin git@github.com:zdevtool/option_pal.git`
+> in the local `option_pal/` folder.
 
 ### 2. Run the backend
 

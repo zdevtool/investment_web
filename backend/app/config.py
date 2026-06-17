@@ -60,7 +60,7 @@ def get_settings() -> Settings:
         "option_pal": ModuleConfig(
             key="option_pal",
             name="Option Pal",
-            repo=os.getenv("OPTION_PAL_REPO", "option_pay"),
+            repo=os.getenv("OPTION_PAL_REPO", "option_pal"),
             workflow=os.getenv("OPTION_PAL_WORKFLOW", "options_scanner.yml"),
             project_dir=PROJECT_ROOT / "option_pal",
         ),
