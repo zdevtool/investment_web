@@ -155,3 +155,39 @@ def test_auth_required_when_token_set(tmp_path, monkeypatch):
     assert r.status_code == 401
     r2 = c.get("/api/modules", headers={"X-Auth-Token": "secret123"})
     assert r2.status_code == 200
+
+
+def _make_artifact_zip(files):
+    import io, zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for name, body in files.items():
+            zf.writestr(name, body)
+    return buf.getvalue()
+
+
+def test_artifact_listing_and_kinds():
+    from app.storage import list_artifact_files
+    blob = _make_artifact_zip({
+        "report.html": b"<h1>hi</h1>",
+        "report.json": b"{\"x\": 1}",
+        "report.txt": b"plain text",
+        "chart.png": b"\x89PNG fake",
+        "blob.bin": b"\x00\x01\x02",
+    })
+    files = {f["name"]: f for f in list_artifact_files(blob)}
+    assert files["report.html"]["kind"] == "html"
+    assert files["report.json"]["kind"] == "json"
+    assert files["report.txt"]["kind"] == "text"
+    assert files["chart.png"]["kind"] == "image"
+    assert files["blob.bin"]["kind"] == "binary"
+
+
+def test_artifact_read_file_and_404():
+    from app.storage import read_artifact_file
+    blob = _make_artifact_zip({"a/b.txt": b"hello"})
+    raw, kind = read_artifact_file(blob, "a/b.txt")
+    assert raw == b"hello"
+    assert kind == "text"
+    with pytest.raises(FileNotFoundError):
+        read_artifact_file(blob, "nope.txt")

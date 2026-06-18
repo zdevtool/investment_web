@@ -41,6 +41,29 @@ export const api = {
     request(`/modules/${key}/runs/${runId}/log${refresh ? '?refresh=true' : ''}`),
   runSummary: (key, runId) =>
     request(`/modules/${key}/runs/${runId}/summary`),
+  runArtifacts: (key, runId) =>
+    request(`/modules/${key}/runs/${runId}/artifacts`),
+  artifactFileUrl: (key, runId, artifactId, fileName, { download = false } = {}) => {
+    const tok = getToken()
+    const params = new URLSearchParams()
+    if (download) params.set('download', 'true')
+    if (tok) params.set('token', tok)
+    const qs = params.toString()
+    const enc = fileName.split('/').map(encodeURIComponent).join('/')
+    return `${BASE}/modules/${key}/runs/${runId}/artifacts/${artifactId}/files/${enc}${qs ? '?' + qs : ''}`
+  },
+  artifactFileText: async (key, runId, artifactId, fileName) => {
+    const url = api.artifactFileUrl(key, runId, artifactId, fileName)
+    const headers = {}
+    const tok = getToken()
+    if (tok) headers['X-Auth-Token'] = tok
+    const res = await fetch(url, { headers })
+    if (!res.ok) {
+      const t = await res.text()
+      throw new Error(t || res.statusText)
+    }
+    return await res.text()
+  },
 
   tradingCandidates: () => request('/trading_pal/candidates'),
   saveTradingCandidates: (body) =>

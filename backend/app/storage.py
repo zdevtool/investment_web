@@ -105,3 +105,51 @@ def extract_log_text_from_zip(zip_bytes: bytes, max_chars: int = 200_000) -> str
             return text
     except zipfile.BadZipFile:
         return zip_bytes.decode("utf-8", errors="replace")[:max_chars]
+
+
+_TEXT_EXTS = {".txt", ".md", ".log", ".csv", ".tsv"}
+_JSON_EXTS = {".json"}
+_HTML_EXTS = {".html", ".htm"}
+_IMG_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
+
+
+def _kind_for(name: str) -> str:
+    ext = Path(name).suffix.lower()
+    if ext in _HTML_EXTS:
+        return "html"
+    if ext in _JSON_EXTS:
+        return "json"
+    if ext in _IMG_EXTS:
+        return "image"
+    if ext in _TEXT_EXTS:
+        return "text"
+    return "binary"
+
+
+def list_artifact_files(zip_bytes: bytes) -> list[dict]:
+    """Inspect an artifact zip and return file metadata (name, size, kind)."""
+    out: list[dict] = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                out.append(
+                    {
+                        "name": info.filename,
+                        "size": info.file_size,
+                        "kind": _kind_for(info.filename),
+                    }
+                )
+    except zipfile.BadZipFile:
+        return []
+    return out
+
+
+def read_artifact_file(zip_bytes: bytes, file_name: str) -> tuple[bytes, str]:
+    """Return (raw_bytes, kind) for one file in the artifact zip."""
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        names = zf.namelist()
+        if file_name not in names:
+            raise FileNotFoundError(file_name)
+        return zf.read(file_name), _kind_for(file_name)

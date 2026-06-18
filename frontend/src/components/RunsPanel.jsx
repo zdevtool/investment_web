@@ -18,6 +18,10 @@ export default function RunsPanel({ moduleKey, triggerInputs = null }) {
   const [cancelling, setCancelling] = useState(false)
   const [filter, setFilter] = useState('')
   const [logCopied, setLogCopied] = useState(false)
+  const [artifacts, setArtifacts] = useState(null)
+  const [artifactsLoading, setArtifactsLoading] = useState(false)
+  const [artifactsError, setArtifactsError] = useState(null)
+  const [tab, setTab] = useState('reports')
   const pollRef = useRef(null)
   const triggerSnapshotRef = useRef(null)
   const lastStatusRef = useRef(null)
@@ -114,16 +118,21 @@ export default function RunsPanel({ moduleKey, triggerInputs = null }) {
   async function openLog(runId, force = false) {
     setOpenRun(runId); setLogLoading(true); setLogText('')
     setSummary(null); setSummaryLoading(true)
+    setArtifacts(null); setArtifactsLoading(true); setArtifactsError(null)
+    setTab('reports')
     try {
-      const [logResp, sumResp] = await Promise.allSettled([
+      const [logResp, sumResp, artResp] = await Promise.allSettled([
         api.runLog(moduleKey, runId, force),
         api.runSummary(moduleKey, runId),
+        api.runArtifacts(moduleKey, runId),
       ])
       if (logResp.status === 'fulfilled') setLogText(logResp.value.log || '(empty)')
       else setLogText(`Error: ${logResp.reason?.message || logResp.reason}`)
       if (sumResp.status === 'fulfilled') setSummary(sumResp.value.summary || null)
+      if (artResp.status === 'fulfilled') setArtifacts(artResp.value.artifacts || [])
+      else setArtifactsError(artResp.reason?.message || String(artResp.reason))
     } finally {
-      setLogLoading(false); setSummaryLoading(false)
+      setLogLoading(false); setSummaryLoading(false); setArtifactsLoading(false)
     }
   }
 
@@ -304,14 +313,21 @@ export default function RunsPanel({ moduleKey, triggerInputs = null }) {
             <div className="flex items-center justify-between p-4 border-b border-white/5">
               <div className="font-semibold">Run #{openRun}</div>
               <div className="flex items-center gap-2 flex-wrap">
-                <button className="btn-ghost text-xs" onClick={copyLog} disabled={!logText}>
-                  {logCopied ? 'Copied!' : 'Copy'}
-                </button>
-                <button className="btn-ghost text-xs" onClick={downloadLog} disabled={!logText}>
-                  Download
-                </button>
+                {tab === 'log' && (
+                  <>
+                    <button className="btn-ghost text-xs" onClick={copyLog} disabled={!logText}>
+                      {logCopied ? 'Copied!' : 'Copy'}
+                    </button>
+                    <button className="btn-ghost text-xs" onClick={downloadLog} disabled={!logText}>
+                      Download
+                    </button>
+                  </>
+                )}
                 <button className="btn-ghost text-xs" onClick={() => openLog(openRun, true)}>Refetch</button>
-                <button className="btn-ghost text-xs" onClick={() => { setOpenRun(null); setLogText(''); setSummary(null) }}>Close</button>
+                <button className="btn-ghost text-xs"
+                        onClick={() => { setOpenRun(null); setLogText(''); setSummary(null); setArtifacts(null) }}>
+                  Close
+                </button>
               </div>
             </div>
 
@@ -319,9 +335,40 @@ export default function RunsPanel({ moduleKey, triggerInputs = null }) {
               <SummaryCard moduleKey={moduleKey} summary={summary} loading={summaryLoading} />
             </div>
 
-            <div className="flex-1 overflow-auto p-3 text-xs font-mono whitespace-pre-wrap leading-relaxed">
-              {logLoading ? 'Loading log…' : (logText || '(empty)')}
+            <div className="px-2 pt-2 border-b border-white/5 flex gap-1 overflow-x-auto">
+              {[
+                { id: 'reports', label: `Reports${artifacts ? ` (${(artifacts || []).reduce((s,a) => s + (a.files?.length || 0), 0)})` : ''}` },
+                { id: 'log', label: 'Log' },
+              ].map(t => (
+                <button
+                  key={t.id}
+                  onClick={() => setTab(t.id)}
+                  className={`px-3 py-1.5 rounded-t-lg text-xs whitespace-nowrap ${
+                    tab === t.id
+                      ? 'bg-ink-800 text-emerald-300 border border-b-0 border-white/10'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
             </div>
+
+            {tab === 'reports' ? (
+              <div className="flex-1 overflow-auto">
+                <ArtifactsView
+                  moduleKey={moduleKey}
+                  runId={openRun}
+                  artifacts={artifacts}
+                  loading={artifactsLoading}
+                  error={artifactsError}
+                />
+              </div>
+            ) : (
+              <div className="flex-1 overflow-auto p-3 text-xs font-mono whitespace-pre-wrap leading-relaxed">
+                {logLoading ? 'Loading log…' : (logText || '(empty)')}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -422,4 +469,155 @@ function ErrorList({ errors }) {
       </ul>
     </details>
   )
+}
+
+
+function ArtifactsView({ moduleKey, runId, artifacts, loading, error }) {
+  const [openFile, setOpenFile] = useState(null)
+  const [fileText, setFileText] = useState(null)
+  const [fileLoading, setFileLoading] = useState(false)
+  const [fileError, setFileError] = useState(null)
+
+  async function pickFile(artifact, file) {
+    setOpenFile({ artifact, file })
+    setFileText(null); setFileError(null)
+    if (file.kind === 'image' || file.kind === 'html') return
+    setFileLoading(true)
+    try {
+      const t = await api.artifactFileText(moduleKey, runId, artifact.id, file.name)
+      setFileText(t)
+    } catch (e) {
+      setFileError(e.message || String(e))
+    } finally {
+      setFileLoading(false)
+    }
+  }
+
+  if (loading) return <div className="p-4 text-sm text-slate-400">Loading artifacts…</div>
+  if (error) return (
+    <div className="p-4 text-sm text-rose-300 break-words">
+      Could not list artifacts: {error}
+    </div>
+  )
+  if (!artifacts || artifacts.length === 0) return (
+    <div className="p-4 text-sm text-slate-400">
+      No artifacts uploaded for this run yet. Reports appear once the workflow finishes
+      and the upload-artifact step has run.
+    </div>
+  )
+
+  return (
+    <div className="p-3 space-y-3">
+      {artifacts.map(a => (
+        <div key={a.id} className="rounded-xl bg-ink-800/60 border border-white/5">
+          <div className="px-3 py-2 flex items-center justify-between gap-2 flex-wrap border-b border-white/5">
+            <div className="min-w-0">
+              <div className="font-medium text-sm truncate">{a.name}</div>
+              <div className="text-xs text-slate-400">
+                {fmtBytes(a.size_in_bytes)} · {(a.files || []).length} file(s)
+                {a.expired ? ' · expired' : ''}
+              </div>
+            </div>
+          </div>
+          {a.error && <div className="px-3 py-2 text-xs text-rose-300">⚠ {a.error}</div>}
+          <ul className="divide-y divide-white/5">
+            {(a.files || []).map(f => (
+              <li key={f.name} className="px-3 py-2 flex items-center gap-2 flex-wrap">
+                <KindBadge kind={f.kind} />
+                <span className="font-mono text-xs truncate flex-1 min-w-0">{f.name}</span>
+                <span className="text-xs text-slate-500 shrink-0">{fmtBytes(f.size)}</span>
+                <div className="flex gap-1 shrink-0">
+                  {f.kind !== 'binary' && (
+                    <button className="btn-ghost px-2 py-1 text-xs"
+                            onClick={() => pickFile(a, f)}>
+                      {f.kind === 'html' ? 'Render' : f.kind === 'image' ? 'View' : 'Open'}
+                    </button>
+                  )}
+                  <a
+                    className="btn-ghost px-2 py-1 text-xs"
+                    href={api.artifactFileUrl(moduleKey, runId, a.id, f.name, { download: true })}
+                  >
+                    ⬇
+                  </a>
+                </div>
+              </li>
+            ))}
+            {(a.files || []).length === 0 && !a.expired && (
+              <li className="px-3 py-2 text-xs text-slate-400">(no inspectable files)</li>
+            )}
+          </ul>
+        </div>
+      ))}
+
+      {openFile && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-end sm:items-center justify-center p-2 sm:p-6">
+          <div className="card w-full max-w-4xl max-h-[92vh] flex flex-col">
+            <div className="flex items-center justify-between p-3 border-b border-white/5 gap-2 flex-wrap">
+              <div className="font-mono text-xs truncate min-w-0">{openFile.file.name}</div>
+              <div className="flex gap-2 shrink-0">
+                <a className="btn-ghost text-xs"
+                   href={api.artifactFileUrl(moduleKey, runId, openFile.artifact.id, openFile.file.name, { download: true })}>
+                  Download
+                </a>
+                <button className="btn-ghost text-xs" onClick={() => setOpenFile(null)}>Close</button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto bg-ink-900">
+              {openFile.file.kind === 'html' && (
+                <iframe
+                  className="w-full h-[78vh] bg-white"
+                  sandbox="allow-same-origin"
+                  src={api.artifactFileUrl(moduleKey, runId, openFile.artifact.id, openFile.file.name)}
+                  title={openFile.file.name}
+                />
+              )}
+              {openFile.file.kind === 'image' && (
+                <div className="flex items-center justify-center p-3">
+                  <img
+                    className="max-w-full max-h-[78vh]"
+                    src={api.artifactFileUrl(moduleKey, runId, openFile.artifact.id, openFile.file.name)}
+                    alt={openFile.file.name}
+                  />
+                </div>
+              )}
+              {(openFile.file.kind === 'json' || openFile.file.kind === 'text') && (
+                <div className="p-3">
+                  {fileLoading && <div className="text-sm text-slate-400">Loading…</div>}
+                  {fileError && <div className="text-sm text-rose-300 break-words">{fileError}</div>}
+                  {!fileLoading && !fileError && fileText != null && (
+                    <pre className="text-xs font-mono whitespace-pre-wrap leading-relaxed">
+                      {openFile.file.kind === 'json' ? prettyJson(fileText) : fileText}
+                    </pre>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function KindBadge({ kind }) {
+  const map = {
+    html: 'bg-emerald-500/15 text-emerald-200',
+    json: 'bg-sky-500/15 text-sky-200',
+    text: 'bg-slate-500/15 text-slate-200',
+    image: 'bg-violet-500/15 text-violet-200',
+    binary: 'bg-amber-500/15 text-amber-200',
+  }
+  return <span className={`pill text-[10px] ${map[kind] || map.binary}`}>{kind}</span>
+}
+
+function fmtBytes(n) {
+  if (n == null) return '?'
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / 1024 / 1024).toFixed(2)} MB`
+}
+
+function prettyJson(t) {
+  try { return JSON.stringify(JSON.parse(t), null, 2) }
+  catch { return t }
 }

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import time
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from .config import Settings, get_settings
@@ -12,13 +14,33 @@ from .storage import (
     append_run_record,
     extract_log_text_from_zip,
     get_local_run,
+    list_artifact_files,
     list_local_runs,
+    read_artifact_file,
     read_json,
     write_json,
 )
 
 
 router = APIRouter()
+
+_ARTIFACT_CACHE: dict[tuple[str, int], tuple[float, bytes]] = {}
+_ARTIFACT_CACHE_TTL = 300.0  # seconds
+
+
+async def _get_artifact_zip(settings: Settings, module, artifact_id: int) -> bytes:
+    cache_key = (module.key, int(artifact_id))
+    now = time.time()
+    cached = _ARTIFACT_CACHE.get(cache_key)
+    if cached and (now - cached[0] < _ARTIFACT_CACHE_TTL):
+        return cached[1]
+    blob = await gh.download_artifact_zip(settings, module, artifact_id)
+    _ARTIFACT_CACHE[cache_key] = (now, blob)
+    if len(_ARTIFACT_CACHE) > 32:
+        oldest = sorted(_ARTIFACT_CACHE.items(), key=lambda kv: kv[1][0])[:-32]
+        for k, _ in oldest:
+            _ARTIFACT_CACHE.pop(k, None)
+    return blob
 
 
 def _module(settings: Settings, key: str):
@@ -132,6 +154,82 @@ async def cancel_run_endpoint(
 ):
     module = _module(settings, key)
     return await gh.cancel_run(settings, module, run_id)
+
+
+# ---------- Run artifacts (script-generated reports) ----------
+@router.get("/modules/{key}/runs/{run_id}/artifacts")
+async def list_artifacts(
+    key: str,
+    run_id: int,
+    settings: Settings = Depends(get_settings),
+):
+    """List artifacts attached to a workflow run, with file-level breakdown."""
+    module = _module(settings, key)
+    artifacts = await gh.list_run_artifacts(settings, module, run_id)
+    enriched: list[dict] = []
+    for a in artifacts:
+        files: list[dict] = []
+        if not a.get("expired"):
+            try:
+                blob = await _get_artifact_zip(settings, module, a["id"])
+                files = list_artifact_files(blob)
+            except HTTPException as e:
+                files = []
+                a["error"] = str(e.detail)
+        enriched.append({**a, "files": files})
+    return {"run_id": run_id, "artifacts": enriched}
+
+
+@router.get("/modules/{key}/runs/{run_id}/artifacts/{artifact_id}/files/{file_path:path}")
+async def read_artifact(
+    key: str,
+    run_id: int,
+    artifact_id: int,
+    file_path: str,
+    download: bool = False,
+    settings: Settings = Depends(get_settings),
+):
+    """Stream a single file out of an artifact zip.
+
+    `download=true` forces an attachment Content-Disposition; otherwise
+    text/html/json/image content is returned inline so the browser can
+    render it.
+    """
+    module = _module(settings, key)
+    blob = await _get_artifact_zip(settings, module, artifact_id)
+    try:
+        raw, kind = read_artifact_file(blob, file_path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"File not in artifact: {file_path}")
+
+    media_map = {
+        "html": "text/html; charset=utf-8",
+        "json": "application/json; charset=utf-8",
+        "text": "text/plain; charset=utf-8",
+        "image": _image_mime(file_path),
+        "binary": "application/octet-stream",
+    }
+    media = media_map.get(kind, "application/octet-stream")
+    headers: dict[str, str] = {}
+    if download or kind == "binary":
+        leaf = file_path.rsplit("/", 1)[-1]
+        headers["Content-Disposition"] = f'attachment; filename="{leaf}"'
+    return Response(content=raw, media_type=media, headers=headers)
+
+
+def _image_mime(name: str) -> str:
+    n = name.lower()
+    if n.endswith(".png"):
+        return "image/png"
+    if n.endswith((".jpg", ".jpeg")):
+        return "image/jpeg"
+    if n.endswith(".gif"):
+        return "image/gif"
+    if n.endswith(".svg"):
+        return "image/svg+xml"
+    if n.endswith(".webp"):
+        return "image/webp"
+    return "application/octet-stream"
 
 
 # ---------- Trading Pal: candidate pool ----------

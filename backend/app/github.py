@@ -142,3 +142,52 @@ async def cancel_run(
             detail=f"GitHub cancel failed: {resp.text}",
         )
     return {"ok": True, "run_id": run_id}
+
+
+async def list_run_artifacts(
+    settings: Settings,
+    module: ModuleConfig,
+    run_id: int,
+) -> list[dict]:
+    url = (
+        f"{GITHUB_API}/repos/{settings.github_owner}/{module.repo}"
+        f"/actions/runs/{run_id}/artifacts"
+    )
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.get(url, headers=_headers(settings))
+    if resp.status_code >= 300:
+        raise HTTPException(
+            status_code=resp.status_code,
+            detail=f"GitHub list artifacts failed: {resp.text[:200]}",
+        )
+    data = resp.json()
+    return [
+        {
+            "id": a["id"],
+            "name": a["name"],
+            "size_in_bytes": a.get("size_in_bytes"),
+            "expired": a.get("expired", False),
+            "created_at": a.get("created_at"),
+            "expires_at": a.get("expires_at"),
+        }
+        for a in data.get("artifacts", [])
+    ]
+
+
+async def download_artifact_zip(
+    settings: Settings,
+    module: ModuleConfig,
+    artifact_id: int,
+) -> bytes:
+    url = (
+        f"{GITHUB_API}/repos/{settings.github_owner}/{module.repo}"
+        f"/actions/artifacts/{artifact_id}/zip"
+    )
+    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+        resp = await client.get(url, headers=_headers(settings))
+    if resp.status_code >= 300:
+        raise HTTPException(
+            status_code=resp.status_code,
+            detail=f"GitHub artifact download failed: {resp.text[:200]}",
+        )
+    return resp.content

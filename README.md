@@ -26,7 +26,11 @@ For each module the UI lets you:
 7. Get a **browser notification** when a workflow you triggered finishes
    (opt-in from the ⚙︎ Settings drawer).
 8. **Copy** or **download** any run log (`.txt`) straight from the modal.
-9. The **Home / Overview** tab shows the latest run, live state, and key
+9. **Reports tab** in the run modal shows the actual reports each
+   workflow generates (the same content normally pushed to Discord /
+   email): HTML rendered inline, JSON pretty-printed, images displayed,
+   text shown raw — all served from the run's GitHub Action artifacts.
+10. The **Home / Overview** tab shows the latest run, live state, and key
    editable counts for all three modules in one screen, with a one-tap **Run**
    button per module. Auto-refreshes every 30 s.
 
@@ -138,8 +142,9 @@ pytest tests/ -q
 
 Eight smoke tests cover health, modules, candidate-pool round-trip, the
 three log parsers, the heartbeat-portfolio round-trip, the `/overview`
-aggregate, and the optional auth gate. They run in <1 s with no network
-access.
+aggregate, the optional auth gate, plus two artifact tests covering
+file-kind detection and zip extraction. They run in <1 s with no
+network access.
 
 ### Use it on your phone
 
@@ -189,6 +194,38 @@ When you open a run, the **Summary card** parses that text into:
 
 The parsers are best-effort regex; they degrade gracefully when log
 formats change.
+
+---
+
+## Run reports (artifacts)
+
+Each project's workflow uploads its rendered reports as a GitHub Action
+artifact named `<module>-pal-report` (`actions/upload-artifact@v4`,
+30-day retention). The Python entry points dump the same payloads they
+send to Discord / email into a local `artifacts/` directory before
+notification:
+
+| Module | Files saved to `artifacts/` |
+|---|---|
+| trading_pal  | `report.json`, `report.txt` |
+| option_pal   | `report.html`, `report.txt`, optional `macro_*.txt` / `summary_*.txt` |
+| heartbeat_pal | `discord_embeds.json`, `email_report.html`, `email_report.txt`, `portfolio_summary.txt` |
+
+The backend exposes:
+
+- `GET /api/modules/{key}/runs/{id}/artifacts` — lists artifacts and
+  their inner files (with `kind` = `html` / `json` / `text` / `image` /
+  `binary`). Backed by an in-memory zip cache (300 s TTL, 32 entries
+  LRU) so opening multiple files doesn't re-download.
+- `GET /api/modules/{key}/runs/{id}/artifacts/{aid}/files/{path}` —
+  streams a single file with a sensible `media_type`. Append
+  `?download=true` to force a `Content-Disposition: attachment`.
+
+The frontend renders HTML inside a sandboxed iframe, images via `<img>`,
+JSON / text in a styled `<pre>`. Iframes / images can't carry custom
+auth headers, so when `AUTH_TOKEN` is set the URL builder appends
+`?token=...` (the FastAPI middleware accepts both `X-Auth-Token` and
+`?token=`).
 
 ---
 
